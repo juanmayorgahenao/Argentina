@@ -13,9 +13,7 @@ suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(bigrquery))
 suppressPackageStartupMessages(library(DBI))
-suppressPackageStartupMessages(library(ggraph))
 suppressPackageStartupMessages(library(trelliscopejs))
-suppressPackageStartupMessages(library(igraph))
 suppressPackageStartupMessages(library(forcats))
 suppressPackageStartupMessages(library(sf))
 suppressPackageStartupMessages(library(maps))
@@ -121,7 +119,7 @@ hours
     AND lon < 180
     AND lon >- 180
     AND nnet_score == 1
-    AND eez_name == "Argentina"
+    AND (eez_name == "Argentina" or eez_name == "Falkland Islands")
     AND seg_id IN (SELECT seg_id FROM [world-fishing-827:gfw_research.good_segments]) 
     AND mmsi IN (Select mmsi FROM [high-seas:vessel_characteristics.VC_all_years] WHERE flag_country_name == "Argentina")
 ```
@@ -143,7 +141,7 @@ hours
     AND lon < 180
     AND lon >- 180
     AND nnet_score == 1
-    AND eez_name == "Argentina"
+    AND (eez_name == "Argentina" or eez_name == "Falkland Islands")
     AND seg_id IN (SELECT seg_id FROM [world-fishing-827:gfw_research.good_segments]) 
     AND mmsi IN (Select mmsi FROM [high-seas:vessel_characteristics.VC_all_years] WHERE flag_country_name == "Argentina")
 ```
@@ -165,7 +163,7 @@ hours
     AND lon < 180
     AND lon >- 180
     AND nnet_score == 1
-    AND eez_name == "Argentina"
+    AND (eez_name == "Argentina" or eez_name == "Falkland Islands")
     AND seg_id IN (SELECT seg_id FROM [world-fishing-827:gfw_research.good_segments]) 
     AND mmsi IN (Select mmsi FROM [high-seas:vessel_characteristics.VC_all_years] WHERE flag_country_name == "Argentina")
 ```
@@ -174,9 +172,9 @@ hours
 ```{r eval = F}
 all_fishing_positions_in_eez <- bind_rows(all_fishing_positions_in_eez_2014, all_fishing_positions_in_eez_2015, all_fishing_positions_in_eez_2016)
 
-write_csv(all_fishing_positions_in_eez, "all_fishing_positions_in_eez.csv")
+write_csv(all_fishing_positions_in_eez, "saved_files/all_fishing_positions_in_eez.csv")
 
-write_csv(summary_all_effort_by_ARG_vessel, "summary_all_effort_by_ARG_vessel.csv")
+write_csv(summary_all_effort_by_ARG_vessel, "saved_files/summary_all_effort_by_ARG_vessel.csv")
 ```
 
 
@@ -184,7 +182,7 @@ Now lets do point in polygon operations to assign to each fishing position the M
 
 
 ```{r}
-all_fishing_positions_in_eez <- read_csv("all_fishing_positions_in_eez.csv")
+all_fishing_positions_in_eez <- read_csv("saved_files/all_fishing_positions_in_eez.csv")
 
 
 all_fishing_positions_in_eez_SF = st_as_sf(all_fishing_positions_in_eez, coords = c("lon", "lat"), 
@@ -206,11 +204,11 @@ summary_of_effort_within_MPAs <- all_positions_within_MPAs_df %>%
 
 summary_of_effort_within_MPAs[is.na(summary_of_effort_within_MPAs)] <- 0
 
-colnames(summary_of_effort_within_MPAs) <- c("year", "mmsi", "fishing_hours_mpa_1", "fishing_hours_mpa_2", "fishing_hours_mpa_3", "fishing_hours_mpa_4", "fishing_hours_mpa_5", "fishing_hours_mpa_6", "fishing_hours_mpa_8",  "fishing_hours_mpa_10", "fishing_hours_mpa_11", "fishing_hours_mpa_12", "fishing_hours_mpa_13", "fishing_hours_mpa_14")
+colnames(summary_of_effort_within_MPAs) <- c("year", "mmsi", "fishing_hours_mpa_1", "fishing_hours_mpa_2", "fishing_hours_mpa_3", "fishing_hours_mpa_4", "fishing_hours_mpa_5", "fishing_hours_mpa_6", "fishing_hours_mpa_7","fishing_hours_mpa_8",  "fishing_hours_mpa_10", "fishing_hours_mpa_11", "fishing_hours_mpa_12", "fishing_hours_mpa_13", "fishing_hours_mpa_14")
 ```
 
 ```{r}
-summary_all_effort_by_ARG_vessel <- read_csv("summary_all_effort_by_ARG_vessel.csv")
+summary_all_effort_by_ARG_vessel <- read_csv("saved_files/summary_all_effort_by_ARG_vessel.csv")
 
 summary_all_effort_by_ARG_vessel <- summary_all_effort_by_ARG_vessel %>% 
   left_join(summary_of_effort_within_MPAs, by = c("year", "mmsi"))
@@ -272,6 +270,8 @@ vessel_by_mpa %>%
 ```
 
 ```{r}
+library(ggsci)
+
 total_percent_of_vessels <- vessel_by_mpa %>% 
   mutate(p_2014 = 100*`vessels in 2014`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2014]),
          p_2015 = 100*`vessels in 2015`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2015]),
