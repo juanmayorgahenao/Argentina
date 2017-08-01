@@ -1,0 +1,436 @@
+---
+title: "R Notebook"
+output:
+  word_document: default
+  html_notebook: default
+---
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, comment = FALSE, prompt = FALSE, progress = FALSE)
+
+suppressPackageStartupMessages(library(sf))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(bigrquery))
+suppressPackageStartupMessages(library(DBI))
+suppressPackageStartupMessages(library(ggraph))
+suppressPackageStartupMessages(library(trelliscopejs))
+suppressPackageStartupMessages(library(igraph))
+suppressPackageStartupMessages(library(forcats))
+suppressPackageStartupMessages(library(sf))
+suppressPackageStartupMessages(library(maps))
+suppressPackageStartupMessages(library(rnaturalearth))
+suppressPackageStartupMessages(library(ggsci))
+
+BQ_connection <-  dbConnect(dbi_driver(), dataset = "", project = "world-fishing-827")
+```
+
+```{r message = FALSE}
+AMP_v5 <- st_read("AMPS_shapefiles/AMPs_5_v1.shp")
+
+plotly::ggplotly(ggplot()+
+  geom_sf(data = AMP_v5, aes(key =OBJECTID_1) ))
+```
+
+# All effort by all Argentinian vessels
+
+First, lets summarize all fishign effort by argentinian vessels. This will serve as the reference point to compare effort in the proposed MPAs.
+
+```{sql, connection = BQ_connection, output.var = "summary_all_effort_by_ARG_vessel", eval = F}
+SELECT
+  a.year year,
+  a.mmsi mmsi,
+  b.gear_type gear_type,
+  SUM(hours) total_hours,
+  SUM(IF(nnet_score == 1, hours, 0 )) total_fishing_hours,
+  SUM(IF(eez_name == "Argentina" AND a.nnet_score == 1, a.hours, 0 )) fishing_hours_eez,
+  SUM(IF(eez_name == "Falkland Islands" AND a.nnet_score == 1, a.hours, 0 )) fishing_hours_falkland,
+  SUM(IF(eez_name IS NULL AND (distance_from_shore >= 10*1852 OR FAO_region IN (88, 48,58)) AND a.nnet_score == 1, a.hours, 0 )) fishing_hours_hs,
+FROM (
+  SELECT
+    *,
+    year(timestamp) year,
+     Integer(REGEXP_REPLACE( if(REGEXP_EXTRACT(regions,'\"(fao:.*?)\"') contains ".",  LEFT(REGEXP_EXTRACT(regions,'\"(fao:.*?)\"'),INSTR(REGEXP_EXTRACT(regions,'\"(fao:.*?)\"'),".")-1),REGEXP_EXTRACT(regions,'\"(fao:.*?)\"')), '[^0-9 ]','')) FAO_region,
+  FROM
+    [world-fishing-827:gfw_research.nn]
+  WHERE
+    _PARTITIONTIME BETWEEN TIMESTAMP('2014-01-01')
+    AND TIMESTAMP('2016-12-31')
+    AND lat < 90
+    AND lat > -90
+    AND lon < 180
+    AND lon >- 180
+    AND seg_id IN (SELECT seg_id FROM [world-fishing-827:gfw_research.good_segments]) ) a
+INNER JOIN (
+  SELECT
+    year,
+    mmsi,
+    flag_country_name,
+    flag_iso3,
+    sovereign_flag_country_name,
+    sovereign_flag_iso3,
+    gear_type_all_years gear_type,
+    length,
+    tonnage,
+    engine_power,
+  FROM
+    [high-seas:vessel_characteristics.VC_all_years]
+  WHERE
+    flag_country_name == "Argentina"
+  GROUP BY
+    year,
+    mmsi,
+    flag_country_name,
+    flag_iso3,
+    sovereign_flag_country_name,
+    sovereign_flag_iso3,
+    length,
+    tonnage,
+    engine_power,
+    gear_type)b
+ON
+  a.mmsi = b.mmsi
+  AND a.year = b.year
+GROUP BY
+  year,
+  mmsi,
+  gear_type
+  having total_fishing_hours > 0
+```
+
+### All fishing positions within the EEZ
+
+Now lets get all **fishing** positions by these vessels inside the EEZ. We will then clip them to the MPAS.
+
+Since the resulting files are huge, we need to run a query for each year separately: 
+
+```{sql connection = BQ_connection, output.var = "all_fishing_positions_in_eez_2016", eval = F}
+SELECT
+year(timestamp) year,
+mmsi, 
+lat, 
+lon,
+hours
+  FROM
+    [world-fishing-827:gfw_research.nn]
+  WHERE
+    _PARTITIONTIME BETWEEN TIMESTAMP('2016-01-01')
+    AND TIMESTAMP('2016-12-31')
+    AND lat < 90
+    AND lat > -90
+    AND lon < 180
+    AND lon >- 180
+    AND nnet_score == 1
+    AND eez_name == "Argentina"
+    AND seg_id IN (SELECT seg_id FROM [world-fishing-827:gfw_research.good_segments]) 
+    AND mmsi IN (Select mmsi FROM [high-seas:vessel_characteristics.VC_all_years] WHERE flag_country_name == "Argentina")
+```
+
+```{sql connection = BQ_connection, output.var = "all_fishing_positions_in_eez_2015", eval = F}
+SELECT
+year(timestamp) year,
+mmsi, 
+lat, 
+lon,
+hours
+  FROM
+    [world-fishing-827:gfw_research.nn]
+  WHERE
+    _PARTITIONTIME BETWEEN TIMESTAMP('2015-01-01')
+    AND TIMESTAMP('2015-12-31')
+    AND lat < 90
+    AND lat > -90
+    AND lon < 180
+    AND lon >- 180
+    AND nnet_score == 1
+    AND eez_name == "Argentina"
+    AND seg_id IN (SELECT seg_id FROM [world-fishing-827:gfw_research.good_segments]) 
+    AND mmsi IN (Select mmsi FROM [high-seas:vessel_characteristics.VC_all_years] WHERE flag_country_name == "Argentina")
+```
+
+```{sql connection = BQ_connection, output.var = "all_fishing_positions_in_eez_2014", eval = F}
+SELECT
+year(timestamp) year,
+mmsi, 
+lat, 
+lon,
+hours
+  FROM
+    [world-fishing-827:gfw_research.nn]
+  WHERE
+    _PARTITIONTIME BETWEEN TIMESTAMP('2014-01-01')
+    AND TIMESTAMP('2014-12-31')
+    AND lat < 90
+    AND lat > -90
+    AND lon < 180
+    AND lon >- 180
+    AND nnet_score == 1
+    AND eez_name == "Argentina"
+    AND seg_id IN (SELECT seg_id FROM [world-fishing-827:gfw_research.good_segments]) 
+    AND mmsi IN (Select mmsi FROM [high-seas:vessel_characteristics.VC_all_years] WHERE flag_country_name == "Argentina")
+```
+
+
+```{r eval = F}
+all_fishing_positions_in_eez <- bind_rows(all_fishing_positions_in_eez_2014, all_fishing_positions_in_eez_2015, all_fishing_positions_in_eez_2016)
+
+write_csv(all_fishing_positions_in_eez, "all_fishing_positions_in_eez.csv")
+
+write_csv(summary_all_effort_by_ARG_vessel, "summary_all_effort_by_ARG_vessel.csv")
+```
+
+
+Now lets do point in polygon operations to assign to each fishing position the MPA in which it occurs (if any)
+
+
+```{r}
+all_fishing_positions_in_eez <- read_csv("all_fishing_positions_in_eez.csv")
+
+
+all_fishing_positions_in_eez_SF = st_as_sf(all_fishing_positions_in_eez, coords = c("lon", "lat"), 
+                 crs = st_crs(AMP_v5))
+
+
+all_positions_within_MPAs <- st_join(all_fishing_positions_in_eez_SF, AMP_v5) %>% 
+  filter(!is.na(OBJECTID_1))
+
+all_positions_within_MPAs_df <- all_positions_within_MPAs
+st_geometry(all_positions_within_MPAs_df) <- NULL
+```
+
+```{r}
+summary_of_effort_within_MPAs <- all_positions_within_MPAs_df %>% 
+  group_by(year, mmsi, OBJECTID_1) %>% 
+  summarise(fishing_hours = sum(hours)) %>% 
+  spread(OBJECTID_1, fishing_hours) 
+
+summary_of_effort_within_MPAs[is.na(summary_of_effort_within_MPAs)] <- 0
+
+colnames(summary_of_effort_within_MPAs) <- c("year", "mmsi", "fishing_hours_mpa_1", "fishing_hours_mpa_2", "fishing_hours_mpa_3", "fishing_hours_mpa_4", "fishing_hours_mpa_5", "fishing_hours_mpa_6", "fishing_hours_mpa_8",  "fishing_hours_mpa_10", "fishing_hours_mpa_11", "fishing_hours_mpa_12", "fishing_hours_mpa_13", "fishing_hours_mpa_14")
+```
+
+```{r}
+summary_all_effort_by_ARG_vessel <- read_csv("summary_all_effort_by_ARG_vessel.csv")
+
+summary_all_effort_by_ARG_vessel <- summary_all_effort_by_ARG_vessel %>% 
+  left_join(summary_of_effort_within_MPAs, by = c("year", "mmsi"))
+
+summary_all_effort_by_ARG_vessel[is.na(summary_all_effort_by_ARG_vessel)] <- 0
+  
+summary_all_effort_by_ARG_vessel <- summary_all_effort_by_ARG_vessel %>% 
+  mutate_at(vars(-year, -mmsi, -gear_type, -total_hours, -total_fishing_hours), funs(round(100*(./total_fishing_hours), digits = 1)))
+
+new_colnames <- colnames(summary_all_effort_by_ARG_vessel)
+
+new_colnames[6:20] <- stringr::str_replace_all(new_colnames[6:20], "fishing_hours", "percent_fishing_hours")
+
+colnames(summary_all_effort_by_ARG_vessel) <- new_colnames
+```
+
+### Visualiztions and summaries
+
+For each MPA, how many vessels fish there?
+
+```{r}
+vessel_by_mpa <- summary_all_effort_by_ARG_vessel %>% 
+  gather(region, fraction, -year, -mmsi, -gear_type, -total_hours, -total_fishing_hours, -percent_fishing_hours_eez, -percent_fishing_hours_falkland, -percent_fishing_hours_hs) %>% 
+  mutate(MPA = as.integer(stringr::str_extract(region,"[0-9]+"))) %>% 
+  filter(fraction > 0) %>% 
+  group_by(MPA, year) %>% 
+  summarise(vessels = n_distinct(mmsi)) %>% 
+  spread(year, vessels) %>% 
+  ungroup()
+
+colnames(vessel_by_mpa) <- c("MPA_id", "vessels in 2014", "vessels in 2015", "vessels in 2016")
+
+rownames(vessel_by_mpa) <- NULL
+
+vessel_by_mpa %>% 
+  mutate(p_2014 = 100*`vessels in 2014`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2014]),
+         p_2015 = 100*`vessels in 2015`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2015]),
+         p_2016 = 100*`vessels in 2016`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2016])) %>% 
+  mutate_if(is.numeric, round, digits = 1) %>% 
+  mutate_at(vars(p_2014, p_2015, p_2016), funs(paste0("(",.,"%)"))) %>% 
+  transmute(MPA_id = MPA_id,
+            `vessels in 2014` = paste(`vessels in 2014`, p_2014),
+            `vessels in 2015` = paste(`vessels in 2015`, p_2015),
+            `vessels in 2016` = paste(`vessels in 2016`, p_2016)) %>% 
+  knitr::kable(align = "r")
+
+
+vessel_by_mpa %>% 
+  mutate(p_2014 = 100*`vessels in 2014`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2014]),
+         p_2015 = 100*`vessels in 2015`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2015]),
+         p_2016 = 100*`vessels in 2016`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2016])) %>% 
+  mutate_if(is.numeric, round, digits = 1) %>% 
+  mutate_at(vars(p_2014, p_2015, p_2016), funs(paste0("(",.,"%)"))) %>% 
+  transmute(MPA_id = MPA_id,
+            `vessels in 2014` = paste(`vessels in 2014`, p_2014),
+            `vessels in 2015` = paste(`vessels in 2015`, p_2015),
+            `vessels in 2016` = paste(`vessels in 2016`, p_2016)) %>% 
+  write_csv("saved_files/table_of_vessels_by_mpa")
+```
+
+```{r}
+total_percent_of_vessels <- vessel_by_mpa %>% 
+  mutate(p_2014 = 100*`vessels in 2014`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2014]),
+         p_2015 = 100*`vessels in 2015`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2015]),
+         p_2016 = 100*`vessels in 2016`/n_distinct(summary_all_effort_by_ARG_vessel$mmsi[summary_all_effort_by_ARG_vessel$year == 2016])) %>% 
+  select(MPA_id, p_2016) %>% 
+  mutate(MPA_id = factor(MPA_id)) %>% 
+  add_row(MPA_id = "total",  p_2016 =  100*n_distinct(filter(all_positions_within_MPAs_df, year == 2016, hours > 0)$mmsi)/n_distinct(filter(all_fishing_positions_in_eez, year == 2016)$mmsi)) %>% 
+  ggplot(aes(x = fct_reorder(MPA_id,p_2016) , y = p_2016, fill = p_2016))+
+  geom_col(show.legend = FALSE)+
+  theme_minimal()+
+  labs(x = "MPA id", y = "% of fishing vessels")+
+  scale_y_continuous(limits = c(0,100))+
+  scale_fill_material("teal")
+
+tiff(paste('saved_plots/total_percent_of_vessels.tiff',sep = ""), height = 12, width = 17, units = 'cm', 
+     compression = "lzw", res = 300)
+
+print(total_percent_of_vessels)
+  
+invisible(dev.off())
+```
+
+
+For each MPA, how much fishing effort happens there?
+
+```{r}
+effort_by_mpa <- summary_all_effort_by_ARG_vessel %>% 
+  gather(region, percent, -year, -mmsi, -gear_type, -total_hours, -total_fishing_hours, -percent_fishing_hours_eez, -percent_fishing_hours_falkland, -percent_fishing_hours_hs) %>% 
+  mutate(MPA = as.integer(stringr::str_extract(region,"[0-9]+"))) %>% 
+  filter(percent > 0) %>% 
+  group_by(MPA, year) %>% 
+  summarise(total_fishing_hours = sum(total_fishing_hours*(percent/100))) %>% 
+  spread(year, total_fishing_hours) %>% 
+  ungroup() %>% 
+  mutate_if(is.numeric, round)
+
+colnames(effort_by_mpa) <- c("MPA_id", "fishing hours in 2014", "fishing hours in 2015", "fishing hours in 2016")
+
+rownames(effort_by_mpa) <- NULL
+
+
+effort_by_mpa %>% 
+  mutate(p_2014 = 100*`fishing hours in 2014`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2014]),
+         p_2015 = 100*`fishing hours in 2015`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2015]),
+         p_2016 = 100*`fishing hours in 2016`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2016])) %>% 
+  mutate_if(is.numeric, round, digits = 2) %>% 
+  mutate_at(vars(p_2014, p_2015, p_2016), funs(paste0("(",.,"%)"))) %>% 
+  transmute(MPA_id = MPA_id,
+            `fishing hours in 2014` = paste(`fishing hours in 2014`, p_2014),
+            `fishing hours in 2015` = paste(`fishing hours in 2015`, p_2015),
+            `fishing hours in 2016` = paste(`fishing hours in 2016`, p_2016)) %>% 
+  knitr::kable(align = "r")
+
+
+effort_by_mpa %>% 
+  mutate(p_2014 = 100*`fishing hours in 2014`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2014]),
+         p_2015 = 100*`fishing hours in 2015`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2015]),
+         p_2016 = 100*`fishing hours in 2016`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2016])) %>% 
+  mutate_if(is.numeric, round, digits = 2) %>% 
+  mutate_at(vars(p_2014, p_2015, p_2016), funs(paste0("(",.,"%)"))) %>% 
+  transmute(MPA_id = MPA_id,
+            `fishing hours in 2014` = paste(`fishing hours in 2014`, p_2014),
+            `fishing hours in 2015` = paste(`fishing hours in 2015`, p_2015),
+            `fishing hours in 2016` = paste(`fishing hours in 2016`, p_2016)) %>% 
+  write_csv("saved_files/table_of_effort_by_mpa.csv")
+```
+
+```{r}
+total_percent_of_fishing_effort <- effort_by_mpa %>% 
+  mutate(p_2014 = 100*`fishing hours in 2014`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2014]),
+         p_2015 = 100*`fishing hours in 2015`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2015]),
+         p_2016 = 100*`fishing hours in 2016`/sum(summary_all_effort_by_ARG_vessel$total_fishing_hours[summary_all_effort_by_ARG_vessel$year == 2016])) %>% 
+  select(MPA_id, p_2016) %>% 
+  mutate(MPA_id = factor(MPA_id)) %>% 
+  add_row(MPA_id = "total",  p_2016 =  100*sum(filter(all_positions_within_MPAs_df, year == 2016)$hours)/sum(filter(all_fishing_positions_in_eez, year == 2016)$hours)) %>% 
+  ggplot(aes(x = fct_reorder(MPA_id,p_2016) , y = p_2016, fill = p_2016))+
+  geom_col(show.legend = FALSE)+
+  theme_minimal()+
+  labs(x = "MPA id", y = "% of fishing effort")+
+  scale_y_continuous(limits = c(0,100))+
+  scale_fill_material("teal")
+
+tiff(paste('saved_plots/total_percent_of_fishing_effort.tiff',sep = ""), height = 12, width = 17, units = 'cm', 
+     compression = "lzw", res = 300)
+
+print(total_percent_of_fishing_effort)
+  
+invisible(dev.off())
+```
+
+
+
+```{r}
+box_plot <- summary_all_effort_by_ARG_vessel %>% 
+  filter(year == 2016) %>% 
+  gather(region, percent, -year, -mmsi, -gear_type, -total_hours, -total_fishing_hours, -percent_fishing_hours_eez, -percent_fishing_hours_falkland, -percent_fishing_hours_hs) %>% 
+  mutate(MPA = factor(stringr::str_extract(region,"[0-9]+"), 
+                      levels = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14),
+                      ordered = TRUE)) %>% 
+  filter(percent > 0, MPA != 5) %>% 
+  ggplot() +
+  geom_boxplot(aes(x  = fct_reorder(MPA, percent), y = percent, fill = MPA), show.legend = FALSE) +
+  theme_minimal() +
+  labs(x = "MPA id", y = "% effort")+
+  scale_fill_manual(values = rev(ggpubr::get_palette(palette = "npg", 11)))
+
+tiff(paste('saved_plots/box_plot.tiff',sep = ""), height = 12, width = 17, units = 'cm', 
+     compression = "lzw", res = 300)
+
+print(box_plot)
+  
+invisible(dev.off())
+```
+
+
+```{r}
+(boxplot_by_gear_type <- summary_all_effort_by_ARG_vessel %>% 
+  filter(year == 2016) %>% 
+  gather(region, percent, -year, -mmsi, -gear_type, -total_hours, -total_fishing_hours, -percent_fishing_hours_eez, -percent_fishing_hours_falkland, -percent_fishing_hours_hs) %>% 
+  mutate(MPA = factor(stringr::str_extract(region,"[0-9]+"), 
+                      levels = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14),
+                      ordered = TRUE)) %>% 
+  filter(percent > 0, MPA != 5, !gear_type %in% c("pole_and_line","fixed_gear")) %>% 
+  ggplot()+
+  geom_boxplot(aes(x  = MPA, y = percent, fill = gear_type), show.legend = FALSE)+
+  facet_wrap("gear_type", scales = "free")+
+  theme_minimal()+
+  labs(x = "MPA id", y = "% effort")+
+  scale_fill_manual(values = rev(ggpubr::get_palette(palette = "npg", 4))))
+
+tiff(paste('saved_plots/boxplot_by_gear_type.tiff',sep = ""), height = 12, width = 17, units = 'cm', 
+     compression = "lzw", res = 300)
+
+print(boxplot_by_gear_type)
+  
+invisible(dev.off())
+```
+
+
+```{r eval = F}
+exploding_bixplot <- explodingboxplotR::exploding_boxplot(
+  summary_all_effort_by_ARG_vessel %>% 
+  filter(year == 2016) %>% 
+  gather(region, percent, -year, -mmsi, -gear_type, -total_hours, -total_fishing_hours, -percent_fishing_hours_eez, -percent_fishing_hours_falkland, -percent_fishing_hours_hs) %>% 
+  mutate(MPA = factor(stringr::str_extract(region,"[0-9]+"), 
+                      levels = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14),
+                      ordered = TRUE)) %>% 
+  filter(percent > 0, MPA != 5),
+  y = "percent",
+  group = "MPA",
+  color = "MPA",
+  margin = list(bottom = 50, left = 50, top = 20, right = 20),
+  xlab = "MPA id",
+  ylab = "% effort in MPA",
+  label = "gear_type",
+  iqr = 1.5
+)
+
+htmlwidgets::saveWidget(exploding_bixplot, "exploding_boxplot.html")
+```
+
+
