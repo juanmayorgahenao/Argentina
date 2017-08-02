@@ -269,6 +269,15 @@ falklands_eez_sp <- as(falklands_eez, "Spatial")
 
 falklands_eez_sp <- rmapshaper::ms_simplify(falklands_eez_sp, keep = 0.003) # this is awesome!
 
+
+arg_simpler_eez_sf <- st_as_sf(arg_simpler_eez_sp)
+
+merged_ARG_eez <- st_read("eez/merged_ARG_eez.shp")
+merged_ARG_eez_sp <- as(merged_ARG_eez, "Spatial")
+
+merged_ARG_eez_sp <- rmapshaper::ms_simplify(merged_ARG_eez_sp, keep = 0.003)
+
+sp::plot(merged_ARG_eez_sp)
 ```
 
 ```{r fig.cap = "Figure 2. Fishing effort in Argentina's EEZ in 2016"}
@@ -278,18 +287,14 @@ arg <- c(left = -70, bottom = -60, right = -50, top = -30)
 
 arg_basemap <- get_stamenmap(arg, zoom = 7, maptype = "terrain")
 
-arg_google_map <- get_googlemap(center = c(lon = -55, lat = -45), zoom = 4, maptype = "satellite")
+arg_google_map <- get_googlemap(center = c(lon = -55, lat = -49),
+                                size = c(640, 640),
+                                scale = 2,
+                                zoom = 4, maptype = "satellite")
 
-(effort_map_with_basemap <- ggmap(arg_basemap)+
+(effort_map_with_basemap <- ggmap(arg_google_map)+
   geom_polygon(
-    data = broom::tidy(arg_simpler_eez_sp),
-    aes(x = long, y = lat, group = group),
-    fill = 'transparent',
-    color = 'black',
-    alpha = 0
-    )+
-    geom_polygon(
-    data = broom::tidy(falklands_eez_sp),
+    data = broom::tidy(merged_ARG_eez_sp),
     aes(x = long, y = lat, group = group),
     fill = 'transparent',
     color = 'black',
@@ -329,7 +334,6 @@ print(effort_map_with_basemap)
     
 invisible(dev.off())
 ```
-
 
 ```{r fig.cap =  "Figure 3. Fishing effort by the top 3 foreign flag states in 2016"}
 (effort_map_by_country_with_basemap <- ggmap(arg_basemap)+
@@ -712,7 +716,61 @@ AMP_v5_sp <- as(AMP_v5, "Spatial")
 
 
 ```{r}
-(effort_map_with_all_MPAs <- ggmap(arg_basemap)+
+(effort_map_with_all_MPAs <- ggmap(arg_google_map)+
+  geom_polygon(
+    data = broom::tidy(merged_ARG_eez_sp),
+    aes(x = long, y = lat, group = group),
+    fill = 'transparent',
+    color = 'black',
+    alpha = 0
+    )+
+  geom_tile(data = binned_eez_effort_2016 %>%
+              group_by(lon_bin_center, lat_bin_center) %>% 
+              summarize(fishing_hours = sum(fishing_kwh, na.rm = T)/1000) %>% 
+              filter(fishing_hours >= .9),
+              aes(lon_bin_center, lat_bin_center, fill = fishing_hours), 
+              interpolate = F, 
+            show.legend = T) +
+    geom_polygon(
+    data = broom::tidy(AMP_v5_sp),
+    aes(x = long, y = lat, group = group),
+    fill = 'transparent',
+    color = 'aquamarine',
+    alpha = 0
+    )+
+  viridis::scale_fill_viridis(name = "fishing energy \n (thousand KWh) \n",
+                              trans = "log", 
+                              breaks = c(1,10,100, 1000, 10000, 100000, 800000),
+                              labels = scales::comma,
+                              direction = 1) +
+  labs(x = "Longitude",
+       y = "Latitude") +
+  guides(fill = guide_colourbar(title.position = "top", 
+                              title.hjust = 0.5,
+                              label.theme = element_text(angle = 0, size = 9)))+
+  scale_x_continuous(expand = c(0,0), breaks = c(-65,-60,-55))+
+  scale_y_continuous(expand = c(0,0))+
+  theme(panel.grid.major = element_line(colour = 'grey80', linetype = "dashed"), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        plot.margin = unit(c(0.7, 0.7, 0.7, 0.7), "cm"),
+        legend.title =  element_text(margin = c(0,0,5,0, "cm"), size = rel(.7)),
+        legend.key.width =  unit(.5, "cm"),
+        axis.text.x = element_text(size = 9),
+        axis.text.y = element_text(size = 9)))
+```
+
+
+```{r}
+tiff("saved_plots/effort_map_with_all_MPAs.tiff", height = 12, width = 20, units = 'cm', compression = "lzw", res = 300)
+    
+print(effort_map_with_all_MPAs)
+    
+invisible(dev.off())
+```
+
+```{r}
+(effort_map_with_all_MPAs <- ggmap(arg_google_map)+
   geom_polygon(
     data = broom::tidy(arg_simpler_eez_sp),
     aes(x = long, y = lat, group = group),
@@ -763,12 +821,56 @@ AMP_v5_sp <- as(AMP_v5, "Spatial")
         axis.text.y = element_text(size = 9)))
 ```
 
+```{r}
+library(leaflet)
+
+factpal <- colorFactor(rainbow(14), AMP_v5$OBJECTID_1)
+
+  
+
+arg_simpler_eez_sp <- sp::spTransform(arg_simpler_eez_sp, sp::CRS("+init=epsg:4326") )
+falklands_eez_sp <- sp::spTransform(falklands_eez_sp, sp::CRS("+init=epsg:4326") )
+
+
+r <- binned_eez_effort_2016 %>%
+  group_by(lon_bin_center, lat_bin_center) %>% 
+  summarize(fishing_hours = sum(fishing_kwh, na.rm = T)/1000) %>% 
+  filter(fishing_hours >= .9)
+
+rr <- raster::rasterFromXYZ(r, res = c(.25,.25), crs = sp::CRS("+init=epsg:4326") )
+
+pal <- colorNumeric("Blues", (raster::values(rr)), na.color = "transparent")
+
+interactive_mpas <- leaflet() %>% 
+  addTiles() %>%
+  addProviderTiles(providers$Stamen.TerrainBackground) %>% 
+  addRasterImage(rr, colors = pal, opacity = 0.8) %>% 
+  addPolygons(data = merged_ARG_eez_sp, fillOpacity = 0.1, smoothFactor = 1,dashArray = "5", fill = F, color = "aquamarine", label = "EEZ", group = "EEZ", weight = 3) %>% 
+  addPolygons(data = AMP_v5_sp[1,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_1", label = "MPA_1") %>% 
+  addPolygons(data = AMP_v5_sp[3,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_3", label = "MPA_3") %>% 
+  addPolygons(data = AMP_v5_sp[4,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_4", label = "MPA_4") %>% 
+  addPolygons(data = AMP_v5_sp[5,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_5", label = "MPA_5") %>% 
+  addPolygons(data = AMP_v5_sp[6,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_6", label = "MPA_6") %>% 
+  addPolygons(data = AMP_v5_sp[7,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_7", label = "MPA_7") %>% 
+  addPolygons(data = AMP_v5_sp[8,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_8", label = "MPA_8") %>% 
+  addPolygons(data = AMP_v5_sp[9,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_9", label = "MPA_9") %>% 
+  addPolygons(data = AMP_v5_sp[10,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_10", label = "MPA_10") %>% 
+  addPolygons(data = AMP_v5_sp[11,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_11", label = "MPA_11") %>% 
+  addPolygons(data = AMP_v5_sp[12,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_12", label = "MPA_12") %>% 
+  addPolygons(data = AMP_v5_sp[13,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_13", label = "MPA_13") %>% 
+  addPolygons(data = AMP_v5_sp[14,], fillOpacity = 0.4, smoothFactor = .2, fillColor = ~factpal(OBJECTID_1), weight = 1, group = "MPA_14", label = "MPA_14") %>% 
+  addLayersControl(baseGroups = c("MPA_1", "MPA_3","MPA_4","MPA_5", "MPA_6","MPA_7","MPA_8", "MPA_9","MPA_10","MPA_11", "MPA_12","MPA_13","MPA_14"), position = "topright", options = layersControlOptions(collapsed = FALSE)) %>%
+  addLegend(pal = pal, values = raster::values(rr), title = "Fishing effort (hours)") %>% 
+  showGroup("EEZ")
+
+
+htmlwidgets::saveWidget(interactive_mpas, "interactive_mpas.html")
+```
 
 ```{r}
-tiff("saved_plots/effort_map_with_all_MPAs.tiff", height = 12, width = 20, units = 'cm', compression = "lzw", res = 300)
-    
-print(effort_map_with_all_MPAs)
-    
-invisible(dev.off())
+binned_eez_effort_2016 %>% 
+  filter(flag_country_name == "Argentina", fishing_hours > 0 ) %>% 
+  select(lat_bin_center, lon_bin_center, fishing_days, fishing_hours, fishing_kwh) %>% 
+  write_csv("saved_files/binned_ARG_effort_for_wcs.csv")
 ```
 
